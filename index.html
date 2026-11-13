@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffff00">
+<title>Ulat Pemakan Daun</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #ffff00;
+    overscroll-behavior: none;
+    overflow: hidden;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: Arial, Helvetica, sans-serif;
+    padding:
+      max(8px, env(safe-area-inset-top))
+      max(8px, env(safe-area-inset-right))
+      max(8px, env(safe-area-inset-bottom))
+      max(8px, env(safe-area-inset-left));
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  canvas {
+    display: block;
+    touch-action: none;
+    background: #ffff00;
+  }
+
+  /* Tombol arah, hanya untuk layar sentuh */
+  #pad {
+    display: none;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: auto auto;
+    gap: 8px;
+    width: min(300px, 90vw);
+    margin-top: 10px;
+  }
+
+  .pad-btn {
+    min-height: 52px;
+    border: 3px solid #333;
+    border-radius: 14px;
+    background: #fff7a6;
+    color: #222;
+    font: inherit;
+    font-size: 17px;
+    font-weight: bold;
+    touch-action: none;
+    cursor: pointer;
+  }
+
+  .pad-btn:active { background: #ffe000; transform: translateY(2px); }
+
+  .up    { grid-area: 1 / 2; }
+  .left  { grid-area: 2 / 1; }
+  .down  { grid-area: 2 / 2; }
+  .right { grid-area: 2 / 3; }
+
+  @media (pointer: coarse) {
+    #pad { display: grid; }
+  }
+
+  #hint {
+    margin-top: 8px;
+    font-size: 14px;
+    color: #333;
+    text-align: center;
+    max-width: 420px;
+  }
+
+  @media (pointer: coarse) {
+    #hint { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<div id="pad">
+  <button class="pad-btn up"    data-dir="90">Atas</button>
+  <button class="pad-btn left"  data-dir="180">Kiri</button>
+  <button class="pad-btn down"  data-dir="270">Bawah</button>
+  <button class="pad-btn right" data-dir="0">Kanan</button>
+</div>
+
+<div id="hint">Gunakan tombol panah untuk belok. Makan daun hijau, hindari titik merah dan tepi area.</div>
+
+<script>
+  // Ukuran logis permainan: area bermain dari -200 sampai 200 di kedua sumbu.
+  const LOGICAL = 400;
+  const CENTER = LOGICAL / 2;
+  const HALF = 200;
+
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const LEAF_SHAPE = [[0, 0], [14, 2], [18, 6], [20, 20], [6, 18], [2, 14]];
+  const NUM_OBSTACLES = 5;
+  const SQUARE = 20;        // ukuran satu segmen ulat
+  const SEG_GAP = 16;       // jarak antar pusat segmen
+  const LEAF_HIT = 20;      // jarak untuk memakan daun
+  const OBSTACLE_HIT = 18;  // jarak tabrakan dengan titik merah
+  const OBSTACLE_DRAW = 10; // jari-jari titik merah yang digambar
+
+  // Status permainan
+  let state = "title";      // "title" | "playing" | "over"
+  let head, heading, speed, length, score, trail, leaf, obstacles;
+
+  function rint(a, b) {
+    return Math.floor(Math.random() * (b - a + 1)) + a;
+  }
+
+  function dist(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
+  function randomPosAwayFrom(point, minDist) {
+    let p;
+    do {
+      p = { x: rint(-HALF, HALF), y: rint(-HALF, HALF) };
+    } while (dist(p, point) < minDist);
+    return p;
+  }
+
+  function reset() {
+    head = { x: 0, y: 0 };
+    heading = 0;          // 0 = kanan, 90 = atas, 180 = kiri, 270 = bawah
+    speed = 2;
+    length = 3;
+    score = 0;
+    trail = [{ x: 0, y: 0 }];
+    obstacles = [];
+    for (let i = 0; i < NUM_OBSTACLES; i++) {
+      obstacles.push(randomPosAwayFrom(head, 60));
+    }
+    leaf = randomPosAwayFrom(head, 60);
+    state = "playing";
+  }
+
+  function setHeading(deg) {
+    heading = deg;
+  }
+
+  function update(dt) {
+    const rad = heading * Math.PI / 180;
+    const move = speed * dt;
+    head.x += Math.cos(rad) * move;
+    head.y += Math.sin(rad) * move;
+
+    trail.push({ x: head.x, y: head.y });
+    if (trail.length > 2000) trail.shift();
+
+    // Makan daun: tambah panjang, tambah kecepatan, skor +10, daun baru.
+    if (dist(head, leaf) < LEAF_HIT) {
+      leaf = randomPosAwayFrom(head, 60);
+      length += 1;
+      speed += 1;
+      score += 10;
+    }
+
+    // Menabrak titik merah: permainan berakhir.
+    if (obstacles.some(o => dist(head, o) < OBSTACLE_HIT)) {
+      state = "over";
+      return;
+    }
+
+    // Keluar dari area: permainan berakhir.
+    if (Math.abs(head.x) > HALF || Math.abs(head.y) > HALF) {
+      state = "over";
+    }
+  }
+
+  // Pusat setiap segmen, berjarak sepanjang jejak, kepala di depan.
+  function segments() {
+    const segs = [{ x: head.x, y: head.y }];
+    let acc = 0;
+    let prev = head;
+    for (let i = trail.length - 1; i >= 0 && segs.length < length; i--) {
+      const p = trail[i];
+      acc += dist(prev, p);
+      prev = p;
+      if (acc >= SEG_GAP) {
+        segs.push({ x: p.x, y: p.y });
+        acc = 0;
+      }
+    }
+    return segs;
+  }
+
+  // Ubah koordinat permainan (y ke atas, titik nol di tengah) ke piksel canvas (y ke bawah).
+  const cx = x => CENTER + x;
+  const cy = y => CENTER - y;
+
+  function draw() {
+    ctx.fillStyle = "#ffff00";
+    ctx.fillRect(0, 0, LOGICAL, LOGICAL);
+
+    // Titik merah selalu terlihat.
+    ctx.fillStyle = "red";
+    obstacles.forEach(o => {
+      ctx.beginPath();
+      ctx.arc(cx(o.x), cy(o.y), OBSTACLE_DRAW, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // Daun dan ulat disembunyikan di layar awal dan layar akhir, seperti versi asli.
+    if (state === "playing") {
+      ctx.fillStyle = "green";
+      ctx.beginPath();
+      LEAF_SHAPE.forEach(([px, py], i) => {
+        const X = cx(leaf.x + px);
+        const Y = cy(leaf.y + py);
+        if (i === 0) ctx.moveTo(X, Y);
+        else ctx.lineTo(X, Y);
+      });
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = "black";
+      segments().forEach(s => {
+        ctx.fillRect(cx(s.x) - SQUARE / 2, cy(s.y) - SQUARE / 2, SQUARE, SQUARE);
+      });
+    }
+
+    ctx.fillStyle = "black";
+    ctx.textBaseline = "middle";
+
+    if (state === "title") {
+      ctx.textAlign = "center";
+      ctx.font = "bold 18px Arial";
+      ctx.fillText("Tekan SPASI atau ketuk layar untuk mulai", CENTER, CENTER);
+    }
+
+    if (state === "over") {
+      ctx.textAlign = "center";
+      ctx.font = "bold 28px Arial";
+      ctx.fillText("PERMAINAN BERAKHIR", CENTER, CENTER - 12);
+      ctx.font = "18px Arial";
+      ctx.fillText("Tekan SPASI atau ketuk layar untuk main lagi", CENTER, CENTER + 22);
+    }
+
+    if (state !== "title") {
+      ctx.textAlign = "right";
+      ctx.font = "bold 40px Arial";
+      ctx.fillText(String(score), cx(130), cy(130));
+    }
+  }
+
+  // Ukuran canvas: menyesuaikan lebar dan tinggi layar, tajam di layar beresolusi tinggi.
+  function resize() {
+    const pad = document.getElementById("pad");
+    const hint = document.getElementById("hint");
+    const padH = getComputedStyle(pad).display === "none" ? 0 : pad.offsetHeight + 10;
+    const hintH = getComputedStyle(hint).display === "none" ? 0 : hint.offsetHeight + 8;
+
+    const availW = window.innerWidth - 16;
+    const availH = window.innerHeight - padH - hintH - 16;
+    const size = Math.max(200, Math.min(availW, availH, 520));
+
+    canvas.style.width = size + "px";
+    canvas.style.height = size + "px";
+
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(size * dpr);
+    canvas.height = Math.round(size * dpr);
+    const scale = canvas.width / LOGICAL;
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  }
+
+  // Kontrol keyboard
+  document.addEventListener("keydown", e => {
+    switch (e.key) {
+      case "ArrowUp":    setHeading(90);  break;
+      case "ArrowRight": setHeading(0);   break;
+      case "ArrowDown":  setHeading(270); break;
+      case "ArrowLeft":  setHeading(180); break;
+      case " ":
+        if (state !== "playing") reset();
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+  });
+
+  // Sentuh di canvas: geser untuk belok, ketuk untuk mulai atau main lagi.
+  let sx = 0, sy = 0;
+  canvas.addEventListener("pointerdown", e => {
+    sx = e.clientX;
+    sy = e.clientY;
+    e.preventDefault();
+  });
+
+  canvas.addEventListener("pointerup", e => {
+    const dx = e.clientX - sx;
+    const dy = e.clientY - sy;
+    if (Math.hypot(dx, dy) < 20) {
+      if (state !== "playing") reset();
+      return;
+    }
+    if (Math.abs(dx) > Math.abs(dy)) setHeading(dx > 0 ? 0 : 180);
+    else setHeading(dy < 0 ? 90 : 270);
+  });
+
+  // Tombol arah di layar: langsung belok, dan memulai permainan jika belum berjalan.
+  document.querySelectorAll(".pad-btn").forEach(btn => {
+    btn.addEventListener("pointerdown", e => {
+      e.preventDefault();
+      if (state !== "playing") reset();
+      setHeading(Number(btn.dataset.dir));
+    });
+  });
+
+  // Cegah zoom ganda dan geser halaman saat bermain di HP.
+  document.addEventListener("touchmove", e => e.preventDefault(), { passive: false });
+
+  window.addEventListener("resize", resize);
+  window.addEventListener("orientationchange", resize);
+
+  // Loop utama. dt bernilai 1 pada 60 fps, jadi kecepatan sama di layar 120 Hz.
+  let last = null;
+  function loop(now) {
+    const dt = last === null ? 1 : Math.min((now - last) / 16.667, 3);
+    last = now;
+    if (state === "playing") update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // Siapkan papan agar titik merah sudah terlihat di layar awal, lalu tunggu.
+  resize();
+  reset();
+  state = "title";
+  requestAnimationFrame(loop);
+</script>
+</body>
+</html>
